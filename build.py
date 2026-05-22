@@ -1,10 +1,11 @@
 """
 Build system for Euricles.
 Uso:
-  python build.py            # Compila .exe + genera instalador
+  python build.py            # Compila .exe + genera instalador (.exe + portable)
   python build.py --exe      # Solo compilar .exe
   python build.py --install  # Compilar + instalar localmente
   python build.py --portable # Compilar + copiar a carpeta portable
+  python build.py --installer # Solo generar instalador (requiere ISCC)
 """
 import os
 import sys
@@ -101,6 +102,7 @@ def main():
     parser.add_argument("--exe", action="store_true", help="Solo compilar .exe")
     parser.add_argument("--install", action="store_true", help="Compilar + instalar local")
     parser.add_argument("--portable", action="store_true", help="Compilar + crear version portable")
+    parser.add_argument("--installer", action="store_true", help="Solo generar instalador Inno Setup")
     args = parser.parse_args()
 
     build_icon()
@@ -120,6 +122,10 @@ def main():
             sys.executable, "-c",
             "import subprocess, sys; subprocess.run(['powershell', '-ExecutionPolicy', 'Bypass', '-File', 'install.ps1', '-CompileOnly'], cwd=sys.path[0])"
         ], "Instalacion PowerShell")
+        return
+
+    if args.installer:
+        build_installer()
         return
 
     build_portable()

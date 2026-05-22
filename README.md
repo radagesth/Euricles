@@ -54,14 +54,26 @@ python build.py --portable
 .\install.ps1
 ```
 
-### Opción 3: Inno Setup
+### Opción 3: Instalador Windows (.exe)
 
-Si tienes [Inno Setup](https://jrsoftware.org/isdl.php) instalado:
+Genera un instalador profesional con Inno Setup (descarga automática):
 
 ```powershell
-iscc installer.iss
-# -> installer/Euricles_Installer_v1.0.0.exe
+# Opcion A: Script PowerShell (descarga Inno Setup automaticamente)
+.\build_installer.ps1
+
+# Opcion B: Via build.py (si Inno Setup ya esta instalado)
+python build.py --installer
+
+# El instalador se genera en: installer/Euricles_Installer_v1.0.0.exe
 ```
+
+Distribuye ese `.exe` en cualquier PC con Windows. El instalador:
+- No requiere Python ni dependencias externas
+- Pregunta la carpeta de instalación
+- Crea accesos directos en escritorio y menú Inicio
+- Configura correo y ciudad predeterminados
+- Incluye desinstalador limpio (elimina datos de usuario si se solicita)
 
 ### Opción 4: Desde código fuente
 

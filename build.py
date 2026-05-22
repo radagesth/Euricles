@@ -18,7 +18,7 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).parent
-DIST_DIR = ROOT / "dist" / "Euricles"
+DIST_DIR = ROOT / "dist"
 PORTABLE_DIR = ROOT / "Euricles_Portable"
 
 

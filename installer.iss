@@ -70,15 +70,12 @@ Name: "startmenu"; Description: "Crear acceso directo en el menu Inicio"; GroupD
 Name: "autostart"; Description: "Ejecutar Euricles al iniciar Windows"; GroupDescription: "Opciones adicionales:"
 
 [Files]
-; Ejecutable principal
+; Ejecutable principal (autocontenido con PyInstaller)
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion replacesameversion
 ; Icono
 Source: "euricles.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Documentacion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
-; Scrapers (necesarios para ejecucion desde codigo fuente)
-Source: "scrapers\*.py"; DestDir: "{app}\scrapers"; Flags: ignoreversion
 
 [Icons]
 ; Menu Inicio

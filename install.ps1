@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ExeName = "Euricles.exe"
 $IconFile = "$ScriptRoot\euricles.ico"
-$BuildDir = "$ScriptRoot\dist\Euricles"
+$BuildDir = "$ScriptRoot\dist"
 $TargetExe = "$BuildDir\$ExeName"
 
 # ── 1. Build icon if missing ──

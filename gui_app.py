@@ -7,6 +7,7 @@ import tempfile
 import json
 import csv
 import io as _io
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import filedialog
 from pathlib import Path
@@ -18,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scrapers import SCRAPER_REGISTRY
 from scrapers.base import check_connectivity
+import config as app_config
 import report
 
 CONFIG_DIR = Path.home() / ".euricles"
@@ -70,6 +72,7 @@ class EuriclesApp(ctk.CTk):
         self.keywords_var   = ctk.StringVar(value=saved.get("keywords", ""))
         self.ciudad_var     = ctk.StringVar(value=saved.get("ciudad", "Santiago"))
         self.modalidad_var  = ctk.StringVar(value=saved.get("modalidad", "Cualquiera"))
+        self.email_var      = ctk.StringVar(value=saved.get("email", ""))
         self.dark_mode      = ctk.BooleanVar(value=saved.get("dark_mode", False))
         self.portal_vars    = {
             k: ctk.BooleanVar(value=saved.get("portals", {}).get(k, (k != "linkedin")))
@@ -170,6 +173,20 @@ class EuriclesApp(ctk.CTk):
         modalidad_menu.set(self.modalidad_var.get())
         self.modalidad_var.trace_add("write", lambda *_: self._save_config())
 
+        ctk.CTkLabel(body, text="Correo para recibir resultados (opcional)",
+                     font=ctk.CTkFont(size=12), text_color=["#64748b", "#94a3b8"]).pack(anchor="w")
+        email_frame = ctk.CTkFrame(body, fg_color="transparent")
+        email_frame.pack(fill="x", pady=(2, 6))
+        email_entry = ctk.CTkEntry(
+            email_frame, textvariable=self.email_var, height=38,
+            placeholder_text="ej: usuario@gmail.com",
+            border_color="#bbf7d0", fg_color=["#f0fdf4", "#1e293b"],
+        )
+        email_entry.pack(side="left", fill="x", expand=True)
+        self._email_status = ctk.CTkLabel(email_frame, text="", font=ctk.CTkFont(size=10))
+        self._email_status.pack(side="right", padx=(4, 0))
+        self.email_var.trace_add("write", lambda *_: self._validate_email())
+
         theme_row = ctk.CTkFrame(body, fg_color="transparent")
         theme_row.pack(fill="x", pady=(4, 0))
         ctk.CTkLabel(theme_row, text="Modo oscuro",
@@ -196,12 +213,25 @@ class EuriclesApp(ctk.CTk):
         self._save_config()
         self._show_step1()
 
+    _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+    def _validate_email(self):
+        val = self.email_var.get().strip()
+        if val and not self._EMAIL_RE.match(val):
+            self._email_status.configure(text="\u2716", text_color="#ef4444")
+        elif val:
+            self._email_status.configure(text="\u2714", text_color="#16a34a")
+        else:
+            self._email_status.configure(text="")
+        self._save_config()
+
     def _save_config(self):
         data = {
             "cargo": self.cargo_var.get(),
             "keywords": self.keywords_var.get(),
             "ciudad": self.ciudad_var.get(),
             "modalidad": self.modalidad_var.get(),
+            "email": self.email_var.get(),
             "dark_mode": self.dark_mode.get(),
             "portals": {k: v.get() for k, v in self.portal_vars.items()},
         }
@@ -274,7 +304,8 @@ class EuriclesApp(ctk.CTk):
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=["#1e293b", "#e2e8f0"]).pack()
         ctk.CTkLabel(body,
-                     text=f"Cargo: {self.cargo_var.get()}  ·  {self.ciudad_var.get()}",
+                     text=f"Cargo: {self.cargo_var.get()}  ·  {self.ciudad_var.get()}" +
+                           (f"  ·  ✉ {self.email_var.get()}" if self.email_var.get().strip() else ""),
                      font=ctk.CTkFont(size=11), text_color=["#64748b", "#94a3b8"]).pack(pady=(2, 16))
 
         ctk.CTkLabel(body, text="Progreso global",
@@ -462,6 +493,11 @@ class EuriclesApp(ctk.CTk):
         ctk.CTkButton(btns, text="📊  Guardar .csv", height=34,
                       fg_color="#2563eb", hover_color="#1d4ed8",
                       command=lambda: self._save_csv(results)).pack(side="left", padx=4, pady=10)
+        email = self.email_var.get().strip()
+        if email and self._EMAIL_RE.match(email):
+            ctk.CTkButton(btns, text="✉  Enviar por correo", height=34,
+                          fg_color="#d97706", hover_color="#b45309",
+                          command=lambda: self._send_email(results)).pack(side="left", padx=4, pady=10)
         ctk.CTkButton(btns, text="🔄  Nueva búsqueda", height=34,
                       fg_color="transparent", border_width=1,
                       border_color="#16a34a", text_color="#16a34a",
@@ -534,13 +570,140 @@ class EuriclesApp(ctk.CTk):
         except Exception as e:
             self._show_error("Error", f"No se pudo guardar el CSV: {e}")
 
-    def _show_saved_dialog(self):
+    def _send_email(self, results: dict):
+        to_email = self.email_var.get().strip()
+        if not to_email or not self._EMAIL_RE.match(to_email):
+            self._show_error("Correo inválido", "Ingresa un correo válido en el paso 1.")
+            return
+
+        smtp_user = app_config.SMTP_USER or os.environ.get("EURICLES_SMTP_USER", "")
+        smtp_pass = app_config.SMTP_PASSWORD or os.environ.get("EURICLES_SMTP_PASSWORD", "")
+
+        if not smtp_user or not smtp_pass:
+            self._show_smtp_config_dialog(to_email, results)
+            return
+
+        self._do_send_email(to_email, results, smtp_user, smtp_pass)
+
+    def _do_send_email(self, to_email: str, results: dict, smtp_user: str, smtp_pass: str):
+        from email_sender import send_report
+
+        total = sum(len(j) for j in results.values())
+        subject = f"Euricles — {total} ofertas encontradas"
+        lines = [f"Resultados de búsqueda Euricles - {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+        for pname, jobs in results.items():
+            lines.append(f"[{pname}] — {len(jobs)} oferta(s)")
+            for j in jobs:
+                lines.append(f"  • {j['title']} | {j['company']} | {j['location']}")
+                if j.get("url"):
+                    lines.append(f"    {j['url']}")
+            lines.append("")
+        body = "\n".join(lines)
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "euricles_resultados.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Portal", "Título", "Empresa", "Ubicación", "Fecha", "URL"])
+                for pname, jobs in results.items():
+                    for j in jobs:
+                        writer.writerow([pname, j.get("title",""), j.get("company",""),
+                                         j.get("location",""), j.get("date",""), j.get("url","")])
+
+            ok, msg = send_report(
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                attachments=[csv_path],
+                smtp_host=app_config.SMTP_HOST,
+                smtp_port=app_config.SMTP_PORT,
+                smtp_user=smtp_user,
+                smtp_password=smtp_pass,
+                use_tls=True,
+            )
+            if ok:
+                self._show_saved_dialog(msg)
+            else:
+                self._show_error("Error de envío", msg)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _show_smtp_config_dialog(self, to_email: str, results: dict):
+        win = ctk.CTkToplevel(self)
+        win.title("Configurar SMTP")
+        win.geometry("460x340")
+        win.grab_set()
+        _center_window(win, 460, 340)
+
+        ctk.CTkLabel(win, text="Configuración de correo saliente",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(14, 4))
+        ctk.CTkLabel(win, text="Ingresa las credenciales SMTP para enviar el reporte.",
+                     font=ctk.CTkFont(size=11), text_color=["#64748b", "#94a3b8"]).pack()
+
+        body = ctk.CTkFrame(win, fg_color="transparent")
+        body.pack(fill="x", padx=20, pady=8)
+
+        ctk.CTkLabel(body, text="Servidor SMTP", anchor="w",
+                     font=ctk.CTkFont(size=11)).pack(fill="x")
+        host_var = ctk.StringVar(value="smtp.gmail.com")
+        ctk.CTkEntry(body, textvariable=host_var, height=32).pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(body, text="Puerto", anchor="w",
+                     font=ctk.CTkFont(size=11)).pack(fill="x")
+        port_var = ctk.StringVar(value="587")
+        ctk.CTkEntry(body, textvariable=port_var, height=32).pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(body, text="Usuario (correo)", anchor="w",
+                     font=ctk.CTkFont(size=11)).pack(fill="x")
+        user_var = ctk.StringVar()
+        ctk.CTkEntry(body, textvariable=user_var, height=32,
+                     placeholder_text="tucorreo@gmail.com").pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(body, text="Contraseña de aplicación", anchor="w",
+                     font=ctk.CTkFont(size=11)).pack(fill="x")
+        pass_var = ctk.StringVar()
+        ctk.CTkEntry(body, textvariable=pass_var, height=32,
+                     show="*", placeholder_text="xxxx xxxx xxxx xxxx").pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(body,
+                     text="Gmail: usa una contraseña de aplicación (no tu contraseña normal)",
+                     font=ctk.CTkFont(size=9), text_color="#f59e0b").pack(anchor="w")
+
+        nav = ctk.CTkFrame(win, fg_color="transparent")
+        nav.pack(fill="x", padx=20, pady=(8, 14))
+        ctk.CTkButton(nav, text="Cancelar", width=100, height=34,
+                      fg_color=["#f1f5f9", "#334155"],
+                      text_color=["#64748b", "#94a3b8"],
+                      command=win.destroy).pack(side="left")
+        ctk.CTkButton(nav, text="Enviar", height=34,
+                      fg_color="#16a34a", hover_color="#15803d",
+                      font=ctk.CTkFont(weight="bold"),
+                      command=lambda: self._smtp_dialog_send(win, to_email, results,
+                                                             host_var, port_var, user_var, pass_var)
+                      ).pack(side="right", fill="x", expand=True, padx=(8, 0))
+
+    def _smtp_dialog_send(self, win, to_email, results, host_var, port_var, user_var, pass_var):
+        host = host_var.get().strip()
+        port = port_var.get().strip()
+        user = user_var.get().strip()
+        pwd = pass_var.get().strip()
+        if not host or not port or not user or not pwd:
+            return
+        try:
+            port_int = int(port)
+        except ValueError:
+            return
+        win.destroy()
+        self._do_send_email(to_email, results, user, pwd)
+
+    def _show_saved_dialog(self, message: str = "Archivo guardado correctamente"):
         win = ctk.CTkToplevel(self)
         win.title("Guardado")
         win.geometry("300x110")
         win.grab_set()
         _center_window(win, 300, 110)
-        ctk.CTkLabel(win, text="✅  Archivo guardado correctamente",
+        ctk.CTkLabel(win, text=f"✅  {message}",
                      font=ctk.CTkFont(size=13)).pack(pady=20)
         ctk.CTkButton(win, text="Cerrar", command=win.destroy,
                       fg_color="#16a34a").pack()

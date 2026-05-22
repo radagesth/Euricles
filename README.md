@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/radagesth/ScrapperBotEnoc1/main/euricles.ico">
-  <img align="right" width="80" height="80" src="https://raw.githubusercontent.com/radagesth/ScrapperBotEnoc1/main/euricles.ico">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/radagesth/Euricles/main/euricles.ico">
+  <img align="right" width="80" height="80" src="https://raw.githubusercontent.com/radagesth/Euricles/main/euricles.ico">
 </picture>
 
 # 🌿 Euricles — Buscador de Empleo Chile
@@ -31,6 +31,7 @@ Euricles es un buscador automatizado de ofertas de empleo en Chile. Consulta mú
 | ⏹️ | **Cancelación** de búsqueda en curso |
 | 🎨 | **Icono propio** multiresolución |
 | 📦 | **Instalador** PowerShell y script Inno Setup |
+| ✉️ | **Envío por correo** de resultados con CSV adjunto (SMTP) |
 
 ---
 
@@ -157,6 +158,10 @@ Edita `config.py` para personalizar:
 | `MAX_RESULTS_PER_PORTAL` | Máximo de resultados por portal/perfil | 20 |
 | `CACHE_ENABLED` | Activar caché de respuestas | True |
 | `CACHE_TTL_HOURS` | Tiempo de vida del caché | 6 horas |
+| `SMTP_HOST` | Servidor SMTP para envío de correo | smtp.gmail.com |
+| `SMTP_PORT` | Puerto SMTP | 587 |
+| `SMTP_USER` | Usuario SMTP (o variable `EURICLES_SMTP_USER`) | — |
+| `SMTP_PASSWORD` | Contraseña SMTP (o variable `EURICLES_SMTP_PASSWORD`) | — |
 
 La configuración de la GUI se persiste automáticamente en `~/.euricles/gui_config.json`.
 

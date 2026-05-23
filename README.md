@@ -5,6 +5,8 @@
 
 # 🌿 Euricles — Buscador de Empleo Chile
 
+> **Documentacion completa**: [docs/MANUAL.md](docs/MANUAL.md) — version servidor, instalador Windows y portable.
+
 [![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)](https://windows.com)
@@ -16,11 +18,13 @@ Euricles es un buscador automatizado de ofertas de empleo en Chile. Consulta mú
 ## ✨ Características
 
 | | Funcionalidad |
-|---|---|
+|---|---|---|
 | 🔍 | **Búsqueda en 4 portales**: [Computrabajo.cl](https://cl.computrabajo.com), [Trabajando.cl](https://www.trabajando.cl), [Laborum.cl](https://www.laborum.cl), [LinkedIn](https://www.linkedin.com) |
 | 🖥️ | **Interfaz gráfica** moderna con CustomTkinter (modo claro/oscuro) |
-| ⌨️ | **CLI** para automatización y scripts |
-| 📄 | **Exportación TXT y CSV** (compatible con Excel) |
+| ⌨️ | **CLI avanzado** con argparse (--profile, --server, --json, --email, --silent) |
+| 🖧 | **Modo servidor** headless, programable con cron / Task Scheduler |
+| 📄 | **Exportación TXT, CSV y JSON** (compatible con Excel) |
+| ✉️ | **Envío automático por correo** de resultados (SMTP) |
 | 🎯 | **Múltiples palabras clave** y perfiles de búsqueda |
 | 🌍 | **Filtro por ubicación** (ciudad o región) |
 | 🏢 | **Filtro por modalidad** (remoto, presencial, híbrido) |
@@ -30,8 +34,8 @@ Euricles es un buscador automatizado de ofertas de empleo en Chile. Consulta mú
 | 📝 | **Logging a archivo** en `~/.euricles/logs/` |
 | ⏹️ | **Cancelación** de búsqueda en curso |
 | 🎨 | **Icono propio** multiresolución |
-| 📦 | **Instalador** PowerShell y script Inno Setup |
-| ✉️ | **Envío por correo** de resultados con CSV adjunto (SMTP) |
+| 📦 | **Instalador** Inno Setup + versión portable |
+| 🐳 | **Docker** lista para servidores |
 
 ---
 
@@ -125,19 +129,23 @@ SEARCH_PROFILES = [
 
 ```
 euricles/
-├── euricles.py              # CLI principal
+├── euricles.py              # CLI principal (modo servidor incluido)
 ├── gui.pyw                  # Lanzador GUI
 ├── gui_app.py               # Interfaz gráfica (CustomTkinter)
 ├── config.py                # Configuración de búsqueda
 ├── report.py                # Generación de reportes TXT/CSV
+├── email_sender.py          # Envío SMTP de resultados
 ├── build.py                 # Sistema de build
 ├── build_icon.py            # Generador de icono
+├── build_installer.py       # Instalador autónomo Python
 ├── install.ps1              # Instalador PowerShell
 ├── installer.iss            # Script Inno Setup
 ├── requirements.txt         # Dependencias
 ├── euricles.ico             # Icono multiresolución
+├── docs/
+│   └── MANUAL.md            # Manual completo (3 sub-productos)
 ├── scrapers/
-│   ├── base.py              # Clase base con caché, rate limiting, conectividad
+│   ├── base.py              # Clase base con caché, rate limiting, Playwright
 │   ├── computrabajo.py      # Scraper Computrabajo.cl
 │   ├── trabajando.py        # Scraper Trabajando.cl
 │   ├── laborum.py           # Scraper Laborum.cl

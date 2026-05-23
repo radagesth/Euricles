@@ -8,6 +8,7 @@ import json
 import csv
 import io as _io
 import re
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import filedialog
 from pathlib import Path
@@ -24,6 +25,17 @@ import report
 
 CONFIG_DIR = Path.home() / ".euricles"
 CONFIG_FILE = CONFIG_DIR / "gui_config.json"
+
+LOG_DIR = CONFIG_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "euricles.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("green")
@@ -59,6 +71,17 @@ def _save_gui_config(data: dict):
     CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _load_smtp_config() -> dict:
+    saved = _load_gui_config()
+    return saved.get("smtp", {})
+
+
+def _save_smtp_config(config: dict):
+    saved = _load_gui_config()
+    saved["smtp"] = config
+    _save_gui_config(saved)
+
+
 class EuriclesApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -80,6 +103,8 @@ class EuriclesApp(ctk.CTk):
         }
         self._cancel_event  = threading.Event()
         self._progress_bars = {}
+        self._portal_status_labels = {}
+        self._keyword_status_text = None
         self._results       = {}
         self._current_frame = None
         self._search_thread = None
@@ -288,7 +313,7 @@ class EuriclesApp(ctk.CTk):
 
     # ── Step 3: progress ──────────────────────────────────────────
 
-    def _show_step3(self, selected_keys: list):
+    def _show_step3(self, selected_keys: list, total_keywords: int = 0):
         self._clear()
         f = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         f.pack(fill="both", expand=True)
@@ -306,7 +331,11 @@ class EuriclesApp(ctk.CTk):
         ctk.CTkLabel(body,
                      text=f"Cargo: {self.cargo_var.get()}  ·  {self.ciudad_var.get()}" +
                            (f"  ·  ✉ {self.email_var.get()}" if self.email_var.get().strip() else ""),
-                     font=ctk.CTkFont(size=11), text_color=["#64748b", "#94a3b8"]).pack(pady=(2, 16))
+                     font=ctk.CTkFont(size=11), text_color=["#64748b", "#94a3b8"]).pack(pady=(2, 8))
+
+        self._keyword_status_text = ctk.CTkLabel(body, text="",
+                     font=ctk.CTkFont(size=11), text_color=["#64748b", "#94a3b8"])
+        self._keyword_status_text.pack(anchor="w", pady=(0, 4))
 
         ctk.CTkLabel(body, text="Progreso global",
                      font=ctk.CTkFont(size=11), text_color=["#475569", "#94a3b8"]).pack(anchor="w")
@@ -316,6 +345,7 @@ class EuriclesApp(ctk.CTk):
         self._global_bar.pack(fill="x", pady=(0, 12))
 
         self._progress_bars = {}
+        self._portal_status_labels = {}
         for key in selected_keys:
             label = PORTALS_LABELS[key]
             row = ctk.CTkFrame(body, fg_color="transparent")
@@ -328,6 +358,11 @@ class EuriclesApp(ctk.CTk):
             bar.set(0)
             bar.pack(side="left", fill="x", expand=True, padx=(8, 0))
             self._progress_bars[key] = bar
+            status = ctk.CTkLabel(row, text="⏳", width=40, anchor="center",
+                                   font=ctk.CTkFont(size=10),
+                                   text_color="#f59e0b")
+            status.pack(side="left", padx=(4, 0))
+            self._portal_status_labels[key] = status
 
         cancel_row = ctk.CTkFrame(body, fg_color="transparent")
         cancel_row.pack(fill="x", pady=(16, 0))
@@ -347,7 +382,7 @@ class EuriclesApp(ctk.CTk):
 
     def _start_search(self):
         if not check_connectivity():
-            self._show_error("Sin conexión a Internet", "Verifica tu red e intenta de nuevo.")
+            self._show_error("Sin conexion a Internet", "Verifica tu red e intenta de nuevo.")
             return
 
         selected = [k for k, v in self.portal_vars.items() if v.get()]
@@ -355,13 +390,15 @@ class EuriclesApp(ctk.CTk):
             return
         self._cancel_event.clear()
         self._results = {}
-        self._show_step3(selected)
-        self._total_portals = len(selected)
-        self._completed_portals = 0
 
         cargo = self.cargo_var.get().strip()
         extra = [kw.strip() for kw in self.keywords_var.get().split(",") if kw.strip()]
         keywords = [cargo] + extra
+        total_keywords = len(keywords) * len(selected)
+
+        self._show_step3(selected, total_keywords)
+        self._total_portals = len(selected)
+        self._completed_portals = 0
 
         profile = {
             "name":     cargo,
@@ -388,7 +425,7 @@ class EuriclesApp(ctk.CTk):
                 portal_name, jobs = future.result()
                 self._results[portal_name] = jobs
                 self._completed_portals += 1
-                self.after(0, lambda k=key: self._on_portal_done(k))
+                self.after(0, lambda k=key, pn=portal_name: self._on_portal_done(k, pn))
         if self._cancel_event.is_set():
             self.after(0, self._show_cancelled)
         else:
@@ -396,19 +433,36 @@ class EuriclesApp(ctk.CTk):
 
     def _scrape_one(self, key: str, profile: dict) -> tuple:
         scraper = SCRAPER_REGISTRY[key]()
+        logger = __import__("logging").getLogger(__name__)
+        self.after(0, lambda k=key: self._update_portal_status(k, "\u23f3"))
         try:
-            jobs = scraper.search(profile, max_results=20, cancel_event=self._cancel_event)
+            max_res = getattr(app_config, "MAX_RESULTS_PER_PORTAL", 20)
+            jobs = scraper.search(profile, max_results=max_res, cancel_event=self._cancel_event)
         except Exception as e:
-            logger = __import__("logging").getLogger(__name__)
             logger.error("[%s] Error: %s", key, e)
             jobs = []
         return scraper.portal_name, jobs
 
-    def _on_portal_done(self, key: str):
+    def _update_portal_status(self, key: str, status: str):
+        if key in self._portal_status_labels:
+            self._portal_status_labels[key].configure(text=status)
+
+    def _update_keyword_status(self, text: str):
+        if self._keyword_status_text:
+            self._keyword_status_text.configure(text=text)
+
+    def _on_portal_done(self, key: str, portal_name: str):
         if key in self._progress_bars:
             self._progress_bars[key].set(1)
         if self._total_portals > 0:
             self._global_bar.set(self._completed_portals / self._total_portals)
+        jobs = self._results.get(portal_name, [])
+        n = len(jobs)
+        if n > 0:
+            self._update_portal_status(key, f"\u2705 {n}")
+        else:
+            self._update_portal_status(key, "\u26a0\ufe0f 0")
+        self._update_keyword_status("")
 
     def _show_error(self, title: str, message: str):
         win = ctk.CTkToplevel(self)
@@ -463,7 +517,7 @@ class EuriclesApp(ctk.CTk):
         banner.pack(fill="x")
         banner.pack_propagate(False)
         ctk.CTkLabel(banner,
-                     text=f"✅  {total} ofertas encontradas   |   {chips}",
+                     text=f"\u2705  {total} ofertas encontradas   |   {chips}",
                      font=ctk.CTkFont(size=11), text_color="white").pack(side="left", padx=14)
 
         scroll = ctk.CTkScrollableFrame(f, fg_color=["#f8fafc", "#0f172a"])
@@ -475,7 +529,13 @@ class EuriclesApp(ctk.CTk):
                          font=ctk.CTkFont(size=13),
                          text_color=["#94a3b8", "#64748b"]).pack(pady=40)
         else:
-            for portal_name, jobs in results.items():
+            name_to_key = {v: k for k, v in PORTALS_LABELS.items()}
+            portal_keys = list(PORTALS_LABELS.keys())
+            sorted_portals = sorted(
+                results.items(),
+                key=lambda x: portal_keys.index(name_to_key.get(x[0], 99))
+            )
+            for portal_name, jobs in sorted_portals:
                 if not jobs:
                     continue
                 ctk.CTkLabel(scroll, text=f"  {portal_name}",
@@ -552,32 +612,37 @@ class EuriclesApp(ctk.CTk):
         )
         if not path:
             return
+        profile_name = self.cargo_var.get().strip()
+        results_by_profile = {profile_name: results}
+        tmp = tempfile.mkdtemp()
         try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Portal", "Título", "Empresa", "Ubicación", "Fecha", "URL"])
-                for portal_name, jobs in results.items():
-                    for job in jobs:
-                        writer.writerow([
-                            portal_name,
-                            job.get("title", ""),
-                            job.get("company", ""),
-                            job.get("location", ""),
-                            job.get("date", ""),
-                            job.get("url", ""),
-                        ])
-            self._show_saved_dialog()
+            generated_txt = report.generate(results_by_profile, tmp)
+            generated_csv = generated_txt.replace(".txt", ".csv")
+            if os.path.exists(generated_csv):
+                shutil.copy(generated_csv, path)
+            else:
+                raise FileNotFoundError("No se genero el CSV")
         except Exception as e:
             self._show_error("Error", f"No se pudo guardar el CSV: {e}")
+            return
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self._show_saved_dialog()
 
     def _send_email(self, results: dict):
         to_email = self.email_var.get().strip()
         if not to_email or not self._EMAIL_RE.match(to_email):
-            self._show_error("Correo inválido", "Ingresa un correo válido en el paso 1.")
+            self._show_error("Correo invalido", "Ingresa un correo valido en el paso 1.")
             return
 
         smtp_user = app_config.SMTP_USER or os.environ.get("EURICLES_SMTP_USER", "")
         smtp_pass = app_config.SMTP_PASSWORD or os.environ.get("EURICLES_SMTP_PASSWORD", "")
+
+        if not smtp_user or not smtp_pass:
+            saved = _load_smtp_config()
+            if saved.get("user") and saved.get("password"):
+                smtp_user = saved["user"]
+                smtp_pass = saved["password"]
 
         if not smtp_user or not smtp_pass:
             self._show_smtp_config_dialog(to_email, results)
@@ -630,13 +695,15 @@ class EuriclesApp(ctk.CTk):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def _show_smtp_config_dialog(self, to_email: str, results: dict):
+        saved_smtp = _load_smtp_config()
+
         win = ctk.CTkToplevel(self)
         win.title("Configurar SMTP")
-        win.geometry("460x340")
+        win.geometry("460x390")
         win.grab_set()
-        _center_window(win, 460, 340)
+        _center_window(win, 460, 390)
 
-        ctk.CTkLabel(win, text="Configuración de correo saliente",
+        ctk.CTkLabel(win, text="Configuracion de correo saliente",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(14, 4))
         ctk.CTkLabel(win, text="Ingresa las credenciales SMTP para enviar el reporte.",
                      font=ctk.CTkFont(size=11), text_color=["#64748b", "#94a3b8"]).pack()
@@ -646,28 +713,33 @@ class EuriclesApp(ctk.CTk):
 
         ctk.CTkLabel(body, text="Servidor SMTP", anchor="w",
                      font=ctk.CTkFont(size=11)).pack(fill="x")
-        host_var = ctk.StringVar(value="smtp.gmail.com")
+        host_var = ctk.StringVar(value=saved_smtp.get("host", "smtp.gmail.com"))
         ctk.CTkEntry(body, textvariable=host_var, height=32).pack(fill="x", pady=(0, 6))
 
         ctk.CTkLabel(body, text="Puerto", anchor="w",
                      font=ctk.CTkFont(size=11)).pack(fill="x")
-        port_var = ctk.StringVar(value="587")
+        port_var = ctk.StringVar(value=str(saved_smtp.get("port", 587)))
         ctk.CTkEntry(body, textvariable=port_var, height=32).pack(fill="x", pady=(0, 6))
 
         ctk.CTkLabel(body, text="Usuario (correo)", anchor="w",
                      font=ctk.CTkFont(size=11)).pack(fill="x")
-        user_var = ctk.StringVar()
+        user_var = ctk.StringVar(value=saved_smtp.get("user", ""))
         ctk.CTkEntry(body, textvariable=user_var, height=32,
                      placeholder_text="tucorreo@gmail.com").pack(fill="x", pady=(0, 6))
 
-        ctk.CTkLabel(body, text="Contraseña de aplicación", anchor="w",
+        ctk.CTkLabel(body, text="Contrasena de aplicacion", anchor="w",
                      font=ctk.CTkFont(size=11)).pack(fill="x")
-        pass_var = ctk.StringVar()
+        pass_var = ctk.StringVar(value=saved_smtp.get("password", ""))
         ctk.CTkEntry(body, textvariable=pass_var, height=32,
                      show="*", placeholder_text="xxxx xxxx xxxx xxxx").pack(fill="x", pady=(0, 4))
 
+        remember_var = ctk.BooleanVar(value=saved_smtp.get("remember", True))
+        ctk.CTkCheckBox(body, text="Recordar configuracion", variable=remember_var,
+                        fg_color="#16a34a", hover_color="#15803d",
+                        font=ctk.CTkFont(size=10)).pack(anchor="w", pady=(2, 0))
+
         ctk.CTkLabel(body,
-                     text="Gmail: usa una contraseña de aplicación (no tu contraseña normal)",
+                     text="Gmail: usa una contrasena de aplicacion (no tu contrasena normal)",
                      font=ctk.CTkFont(size=9), text_color="#f59e0b").pack(anchor="w")
 
         nav = ctk.CTkFrame(win, fg_color="transparent")
@@ -680,20 +752,31 @@ class EuriclesApp(ctk.CTk):
                       fg_color="#16a34a", hover_color="#15803d",
                       font=ctk.CTkFont(weight="bold"),
                       command=lambda: self._smtp_dialog_send(win, to_email, results,
-                                                             host_var, port_var, user_var, pass_var)
+                                                             host_var, port_var, user_var,
+                                                             pass_var, remember_var)
                       ).pack(side="right", fill="x", expand=True, padx=(8, 0))
 
-    def _smtp_dialog_send(self, win, to_email, results, host_var, port_var, user_var, pass_var):
+    def _smtp_dialog_send(self, win, to_email, results, host_var, port_var,
+                           user_var, pass_var, remember_var):
         host = host_var.get().strip()
         port = port_var.get().strip()
         user = user_var.get().strip()
         pwd = pass_var.get().strip()
+        remember = remember_var.get()
         if not host or not port or not user or not pwd:
             return
         try:
             port_int = int(port)
         except ValueError:
             return
+        if remember:
+            _save_smtp_config({
+                "host": host,
+                "port": port_int,
+                "user": user,
+                "password": pwd,
+                "remember": True,
+            })
         win.destroy()
         self._do_send_email(to_email, results, user, pwd)
 

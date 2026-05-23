@@ -5,7 +5,7 @@ import os
 import hashlib
 import logging
 import socket
-from abc import ABC, abstractmethod
+from abc import ABC
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
@@ -88,9 +88,80 @@ class BaseScraper(ABC):
     best_effort: bool = False
     base_url: str = ""
     use_cloudscraper: bool = False
+    use_playwright: bool = False
 
     def __init__(self):
         self._session = None
+
+    # ── Playwright helpers ────────────────────────────────────
+
+    def _create_playwright_browser(self, playwright):
+        return playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
+        )
+
+    def _prepare_playwright_context(self, context):
+        pass
+
+    def _teardown_playwright_context(self, context):
+        pass
+
+    def _search_keyword_playwright(self, page, keyword: str, location: str,
+                                    limit: int, cancel_event=None) -> list[dict]:
+        return []
+
+    def _search_playwright(self, profile: dict, max_results: int = 20,
+                            cancel_event=None) -> list[dict]:
+        jobs = []
+        keywords = profile.get("keywords", [])
+        location = profile.get("location", "")
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.error("[%s] playwright no instalado. pip install playwright && playwright install chromium", self.portal_name)
+            return []
+
+        try:
+            with sync_playwright() as p:
+                browser = self._create_playwright_browser(p)
+                try:
+                    context = browser.new_context(
+                        user_agent=random.choice(USER_AGENTS),
+                        locale="es-CL",
+                        viewport={"width": 1920, "height": 1080},
+                    )
+                    self._prepare_playwright_context(context)
+                    page = context.new_page()
+                    for keyword in keywords:
+                        if cancel_event and cancel_event.is_set():
+                            break
+                        if len(jobs) >= max_results:
+                            break
+                        logger.info("[%s] Buscando (playwright): %s en %s", self.portal_name, keyword, location or "Chile")
+                        time.sleep(random.uniform(0.5, 1.5))
+                        found = self._search_keyword_playwright(
+                            page, keyword, location, max_results - len(jobs), cancel_event
+                        )
+                        jobs.extend(found)
+                    self._teardown_playwright_context(context)
+                finally:
+                    browser.close()
+        except Exception as e:
+            logger.warning("[%s] Error en playwright: %s", self.portal_name, e)
+
+        seen = set()
+        unique = []
+        for job in jobs:
+            if job["url"] not in seen:
+                seen.add(job["url"])
+                unique.append(job)
+        return unique[:max_results]
 
     def _get_session(self) -> requests.Session:
         if self._session is None:
@@ -168,6 +239,9 @@ class BaseScraper(ABC):
         return ""
 
     def search(self, profile: dict, max_results: int = 20, cancel_event=None) -> list[dict]:
+        if self.use_playwright:
+            return self._search_playwright(profile, max_results, cancel_event)
+
         jobs = []
         keywords = profile.get("keywords", [])
         location = profile.get("location", "")
@@ -191,6 +265,5 @@ class BaseScraper(ABC):
                 unique.append(job)
         return unique[:max_results]
 
-    @abstractmethod
     def _search_keyword(self, keyword: str, location: str, limit: int) -> list[dict]:
-        pass
+        return []

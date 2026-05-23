@@ -214,7 +214,7 @@ def build():
             "--distpath", str(OUTPUT_DIR),
             "--workpath", str(tmp_dir / "build"),
             "--specpath", str(tmp_dir),
-            "--add-data", f"{ICO_PATH};." if ICO_PATH.exists() else "",
+        ] + (["--add-data", f"{ICO_PATH};."] if ICO_PATH.exists() else []) + [
             "--hidden-import", "win32com.client",
             str(installer_file),
         ],
